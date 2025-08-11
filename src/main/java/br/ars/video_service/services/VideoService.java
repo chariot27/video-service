@@ -2,7 +2,6 @@ package br.ars.video_service.services;
 
 import br.ars.video_service.dto.VideoResponseDTO;
 import br.ars.video_service.mapper.VideoMapper;
-import br.ars.video_service.models.Video;
 import br.ars.video_service.repositories.VideoRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

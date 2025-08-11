@@ -1,46 +1,27 @@
-# ==========================
-# ⚙️ Etapa 1: Build (Gradle)
-# ==========================
+# ⚙️ Etapa 1: Build da aplicação
 FROM gradle:8.5-jdk17 AS builder
+
 WORKDIR /app
 
-# Cache de dependências (não exige gradle.properties)
-COPY build.gradle build.gradle
-COPY settings.gradle settings.gradle
-# Se usar Kotlin DSL, comente a linha acima e descomente estas:
-# COPY build.gradle.kts build.gradle.kts
-# COPY settings.gradle.kts settings.gradle.kts
-
-COPY gradle gradle
-COPY gradlew gradlew
-RUN chmod +x gradlew
-
-# Resolve deps sem código ainda (ignora falha de árvore opcional)
-RUN ./gradlew --no-daemon dependencies || true
-
-# Agora copia o projeto inteiro
+# Copia todos os arquivos do projeto
 COPY . .
 
-# Build do jar (pula testes)
-RUN ./gradlew --no-daemon clean bootJar -x test
+# Executa o build (gera o .jar)
+RUN gradle bootJar -x test
 
-# ==========================================
-# 🐳 Etapa 2: Runtime leve com FFmpeg + JRE
-# ==========================================
-FROM eclipse-temurin:17-jre-alpine
+# 🐳 Etapa 2: Imagem final com JDK leve
+FROM eclipse-temurin:17-jdk-alpine
 ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-ENV TZ=America/Sao_Paulo
-
-RUN apk add --no-cache ffmpeg tzdata ca-certificates && update-ca-certificates
 
 WORKDIR /app
+
+# Copia o JAR gerado na etapa anterior
 COPY --from=builder /app/build/libs/*.jar app.jar
-
-# Usuário não-root
-RUN addgroup -S app && adduser -S app -G app
-USER app
-
+# Define variáveis de ambiente padrão (override no Docker Run ou Render)
 ENV SERVER_PORT=8086
+
+# Expõe a porta configurada (Render usa isso)
 EXPOSE ${SERVER_PORT}
 
-ENTRYPOINT ["java","-jar","/app/app.jar"]
+# Comando para iniciar a aplicação
+ENTRYPOINT ["java", "-jar", "app.jar"]
