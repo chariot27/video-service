@@ -1,39 +1,14 @@
 package br.ars.video_service.dto;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
+import java.util.UUID;
 
 public class VideoRequestDTO {
-
-    @NotBlank
-    private String titulo;
-
+    private UUID userId;
     private String descricao;
 
-    @NotNull
-    private Integer duracaoSegundos;
+    public UUID getUserId() { return userId; }
+    public void setUserId(UUID userId) { this.userId = userId; }
 
-    public String getTitulo() {
-        return titulo;
-    }
-
-    public void setTitulo(String titulo) {
-        this.titulo = titulo;
-    }
-
-    public String getDescricao() {
-        return descricao;
-    }
-
-    public void setDescricao(String descricao) {
-        this.descricao = descricao;
-    }
-
-    public Integer getDuracaoSegundos() {
-        return duracaoSegundos;
-    }
-
-    public void setDuracaoSegundos(Integer duracaoSegundos) {
-        this.duracaoSegundos = duracaoSegundos;
-    }
+    public String getDescricao() { return descricao; }
+    public void setDescricao(String descricao) { this.descricao = descricao; }
 }

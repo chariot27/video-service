@@ -1,5 +1,7 @@
+// src/main/java/br/ars/video_service/models/Video.java
 package br.ars.video_service.models;
 
+import br.ars.video_service.enums.VideoStatus;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -9,115 +11,66 @@ import java.util.UUID;
 public class Video {
 
     @Id
-    @GeneratedValue
+    @Column(nullable = false, updatable = false)
     private UUID id;
 
     @Column(nullable = false)
-    private String titulo;
+    private UUID userId;
 
-    @Column(length = 1000)
-    private String descricao;
+    @Column(nullable = false, length = 300)
+    private String uniqueSlug;
 
-    @Column(name = "duracao_segundos")
-    private Integer duracaoSegundos;
+    private String originalFilename;
 
-    @Column(name = "caminho_local", nullable = false)
-    private String caminhoLocal;
+    // ---- Bunny Stream ----
+    private String streamVideoId;  // <- precisa pros métodos get/setStreamVideoId
+    private String hlsMasterUrl;   // <- URL playlist.m3u8
+    private String thumbnailUrl;
 
-    @Column(name = "caminho_cdn")
-    private String caminhoCDN;
+    @Enumerated(EnumType.STRING)
+    private VideoStatus status;    // <- precisa pro setStatus/getStatus
 
-    @Column(name = "data_upload")
     private LocalDateTime dataUpload;
-
-    @Column(name = "quantidade_likes")
-    private Long likes = 0L;
-
-    @Column(name = "foi_otimizado")
-    private boolean foiOtimizado = false;
-
-    @Column(name = "ativo")
     private boolean ativo = true;
 
-    // Getters e Setters
+    // legado / compat
+    private boolean foiOtimizado;
+    private String caminhoCDN;
 
-    public UUID getId() {
-        return id;
-    }
+    // ===== Getters/Setters =====
+    public UUID getId() { return id; }
+    public void setId(UUID id) { this.id = id; }
 
-    public void setId(UUID id) {
-        this.id = id;
-    }
+    public UUID getUserId() { return userId; }
+    public void setUserId(UUID userId) { this.userId = userId; }
 
-    public String getTitulo() {
-        return titulo;
-    }
+    public String getUniqueSlug() { return uniqueSlug; }
+    public void setUniqueSlug(String uniqueSlug) { this.uniqueSlug = uniqueSlug; }
 
-    public void setTitulo(String titulo) {
-        this.titulo = titulo;
-    }
+    public String getOriginalFilename() { return originalFilename; }
+    public void setOriginalFilename(String originalFilename) { this.originalFilename = originalFilename; }
 
-    public String getDescricao() {
-        return descricao;
-    }
+    public String getStreamVideoId() { return streamVideoId; }
+    public void setStreamVideoId(String streamVideoId) { this.streamVideoId = streamVideoId; }
 
-    public void setDescricao(String descricao) {
-        this.descricao = descricao;
-    }
+    public String getHlsMasterUrl() { return hlsMasterUrl; }
+    public void setHlsMasterUrl(String hlsMasterUrl) { this.hlsMasterUrl = hlsMasterUrl; }
 
-    public Integer getDuracaoSegundos() {
-        return duracaoSegundos;
-    }
+    public String getThumbnailUrl() { return thumbnailUrl; }
+    public void setThumbnailUrl(String thumbnailUrl) { this.thumbnailUrl = thumbnailUrl; }
 
-    public void setDuracaoSegundos(Integer duracaoSegundos) {
-        this.duracaoSegundos = duracaoSegundos;
-    }
+    public VideoStatus getStatus() { return status; }
+    public void setStatus(VideoStatus status) { this.status = status; }
 
-    public String getCaminhoLocal() {
-        return caminhoLocal;
-    }
+    public LocalDateTime getDataUpload() { return dataUpload; }
+    public void setDataUpload(LocalDateTime dataUpload) { this.dataUpload = dataUpload; }
 
-    public void setCaminhoLocal(String caminhoLocal) {
-        this.caminhoLocal = caminhoLocal;
-    }
+    public boolean isAtivo() { return ativo; }
+    public void setAtivo(boolean ativo) { this.ativo = ativo; }
 
-    public String getCaminhoCDN() {
-        return caminhoCDN;
-    }
+    public boolean isFoiOtimizado() { return foiOtimizado; }
+    public void setFoiOtimizado(boolean foiOtimizado) { this.foiOtimizado = foiOtimizado; }
 
-    public void setCaminhoCDN(String caminhoCDN) {
-        this.caminhoCDN = caminhoCDN;
-    }
-
-    public LocalDateTime getDataUpload() {
-        return dataUpload;
-    }
-
-    public void setDataUpload(LocalDateTime dataUpload) {
-        this.dataUpload = dataUpload;
-    }
-
-    public Long getLikes() {
-        return likes;
-    }
-
-    public void setLikes(Long likes) {
-        this.likes = likes;
-    }
-
-    public boolean isFoiOtimizado() {
-        return foiOtimizado;
-    }
-
-    public void setFoiOtimizado(boolean foiOtimizado) {
-        this.foiOtimizado = foiOtimizado;
-    }
-
-    public boolean isAtivo() {
-        return ativo;
-    }
-
-    public void setAtivo(boolean ativo) {
-        this.ativo = ativo;
-    }
+    public String getCaminhoCDN() { return caminhoCDN; }
+    public void setCaminhoCDN(String caminhoCDN) { this.caminhoCDN = caminhoCDN; }
 }
