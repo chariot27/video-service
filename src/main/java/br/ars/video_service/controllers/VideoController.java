@@ -35,33 +35,18 @@ public class VideoController {
     }
 
     // Upload para Bunny Stream (gerenciado)
-    @PostMapping(
-            value = "/upload",
-            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
-            produces = MediaType.APPLICATION_JSON_VALUE
-    )
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<VideoResponseDTO> upload(
-            @RequestPart("data") String dataJson,
-            @RequestPart("file") MultipartFile file) throws IOException {
-
-        VideoRequestDTO data;
-        try {
-            data = objectMapper.readValue(dataJson, VideoRequestDTO.class);
-        } catch (Exception e) {
-            log.warn("Part 'data' inválida: {}", dataJson, e);
-            return ResponseEntity.badRequest().build();
-        }
-
-        log.info("UPLOAD IN: userId={} nomeArq={} size={} bytes contentType={}",
-                data.getUserId(),
-                file.getOriginalFilename(),
-                file.getSize(),
-                file.getContentType());
-
-        VideoResponseDTO dto = streamIngest.uploadToStream(data, file);
-        // 202 pois o encode ainda pode estar em processamento no Bunny
+        @RequestPart("data") String dataJson,
+        @RequestPart("file") MultipartFile file
+    ) throws IOException {
+        var data = new ObjectMapper().readValue(dataJson, VideoRequestDTO.class);
+        log.info("UPLOAD IN: userId={} nomeArq={} size={} type={}",
+                data.getUserId(), file.getOriginalFilename(), file.getSize(), file.getContentType());
+        var dto = streamIngest.uploadToStream(data, file);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(dto);
     }
+
 
     @GetMapping
     public List<VideoResponseDTO> list() {
