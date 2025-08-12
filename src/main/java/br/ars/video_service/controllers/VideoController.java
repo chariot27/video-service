@@ -3,6 +3,7 @@ package br.ars.video_service.controllers;
 import br.ars.video_service.dto.VideoRequestDTO;
 import br.ars.video_service.dto.VideoResponseDTO;
 import br.ars.video_service.services.VideoIngestStreamService;
+import br.ars.video_service.services.VideoQueryService;
 import br.ars.video_service.services.VideoService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -17,37 +18,50 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/videos")
-@CrossOrigin
+@CrossOrigin // ajuste se quiser restringir origens
 public class VideoController {
 
     private static final Logger log = LoggerFactory.getLogger(VideoController.class);
 
     private final VideoIngestStreamService streamIngest;
     private final VideoService videoService;
+    private final VideoQueryService videoQueryService;
     private final ObjectMapper objectMapper;
 
     public VideoController(VideoIngestStreamService streamIngest,
                            VideoService videoService,
+                           VideoQueryService videoQueryService,
                            ObjectMapper objectMapper) {
         this.streamIngest = streamIngest;
         this.videoService = videoService;
+        this.videoQueryService = videoQueryService;
         this.objectMapper = objectMapper;
     }
 
     // Upload para Bunny Stream (gerenciado)
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<VideoResponseDTO> upload(
-        @RequestPart("data") String dataJson,
-        @RequestPart("file") MultipartFile file
+            @RequestPart("data") String dataJson,
+            @RequestPart("file") MultipartFile file
     ) throws IOException {
-        var data = new ObjectMapper().readValue(dataJson, VideoRequestDTO.class);
+        var data = objectMapper.readValue(dataJson, VideoRequestDTO.class);
+
         log.info("UPLOAD IN: userId={} nomeArq={} size={} type={}",
                 data.getUserId(), file.getOriginalFilename(), file.getSize(), file.getContentType());
+
         var dto = streamIngest.uploadToStream(data, file);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(dto);
     }
 
+    // Lista somente vídeos prontos (READY) com URL HLS do CDN
+    @GetMapping("/ready")
+    public ResponseEntity<List<VideoResponseDTO>> listReady(
+            @RequestParam(defaultValue = "12") int limit
+    ) {
+        return ResponseEntity.ok(videoQueryService.listReady(limit));
+    }
 
+    // CRUD/consulta geral (se ainda usa)
     @GetMapping
     public List<VideoResponseDTO> list() {
         return videoService.listarVideos();
