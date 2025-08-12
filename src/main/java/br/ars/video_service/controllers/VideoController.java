@@ -8,20 +8,17 @@ import br.ars.video_service.services.VideoIngestStreamService;
 import br.ars.video_service.services.VideoQueryService;
 import br.ars.video_service.services.VideoService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
 import java.time.OffsetDateTime;
-import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @RestController
@@ -37,15 +34,6 @@ public class VideoController {
     private final ObjectMapper objectMapper;
     private final StreamUrlService streamUrlService;
 
-    // Bunny API (para reprocess)
-    @Value("${bunny.stream.library-id}")
-    private String bunnyLibraryId;
-
-    @Value("${bunny.stream.api-key}")
-    private String bunnyApiKey;
-
-    private WebClient bunnyClient; // lazy
-
     public VideoController(VideoIngestStreamService streamIngest,
                            VideoService videoService,
                            VideoQueryService videoQueryService,
@@ -58,13 +46,12 @@ public class VideoController {
         this.streamUrlService = streamUrlService;
     }
 
-    /** Upload para Bunny Stream (gerenciado) + reprocess opcional + aguardo opcional */
+    /** Upload para Bunny Stream (gerenciado) */
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<VideoResponseDTO> upload(
             @RequestPart("data") String dataJson,
             @RequestPart("file") MultipartFile file,
-            @RequestParam(name = "waitSeconds", defaultValue = "0") int waitSeconds,
-            @RequestParam(name = "reprocess", defaultValue = "true") boolean doReprocess
+            HttpServletRequest req
     ) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Arquivo ausente ou vazio.");
@@ -75,78 +62,44 @@ public class VideoController {
         log.info("UPLOAD IN: userId={} nomeArq={} size={} type={}",
                 data.getUserId(), file.getOriginalFilename(), file.getSize(), file.getContentType());
 
-        // 1) Cria e envia para o Bunny (serviço existente)
         var dto = streamIngest.uploadToStream(data, file);
 
-        // 2) Dispara reprocess (antecipa o pipeline de HLS)
-        if (doReprocess && dto != null && hasGuid(dto.getStreamVideoId())) {
-            triggerReprocess(dto.getStreamVideoId());
-        }
-
-        // 3) (Opcional) Aguarda HLS ficar disponível por até waitSeconds
-        if (dto != null && waitSeconds > 0) {
-            dto = waitUntilHls(dto.getId(), waitSeconds);
-        }
-
-        // 4) Assina URL (se já houver guid/url)
-        signDtoIfPossible(dto);
+        // já devolve HLS assinado para o cliente atual (se possível)
+        signDtoForRequest(dto, req);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(dto);
     }
 
-    /** Lista somente vídeos prontos (READY) com URL HLS assinada */
+    /** Lista somente vídeos prontos (READY) com URL HLS assinada para o cliente atual */
     @GetMapping("/ready")
-    public ResponseEntity<List<VideoResponseDTO>> listReady(@RequestParam(defaultValue = "12") int limit) {
-        int safeLimit = Math.max(1, Math.min(50, limit)); // clamp 1..50
+    public ResponseEntity<List<VideoResponseDTO>> listReady(@RequestParam(defaultValue = "12") int limit,
+                                                            HttpServletRequest req) {
+        int safeLimit = Math.max(1, Math.min(50, limit));
 
         var list = videoQueryService.listReady(safeLimit);
         var signed = list.stream()
-                .map(this::signDtoIfPossible)
+                .map(v -> signDtoForRequest(v, req))
                 .collect(Collectors.toList());
 
         return ResponseEntity.ok(signed);
     }
 
-    /** Lista geral (caso use em outras telas) */
     @GetMapping
     public List<VideoResponseDTO> list() {
         return videoService.listarVideos();
     }
 
     @GetMapping("/{id}")
-    public VideoResponseDTO get(@PathVariable UUID id) {
+    public VideoResponseDTO get(@PathVariable UUID id, HttpServletRequest req) {
         var dto = videoService.buscarPorId(id);
-        return signDtoIfPossible(dto);
+        return signDtoForRequest(dto, req);
     }
 
-    /** Força refresh do status no Bunny e retorna o DTO atualizado com URL assinada */
+    /** Força refresh no Bunny e retorna DTO atualizado com URL assinada para o cliente atual */
     @GetMapping("/{id}/status")
-    public VideoResponseDTO refresh(@PathVariable UUID id) {
+    public VideoResponseDTO refresh(@PathVariable UUID id, HttpServletRequest req) {
         var dto = streamIngest.refreshStatus(id);
-        return signDtoIfPossible(dto);
-    }
-
-    /** Reprocessa um vídeo existente e (opcionalmente) aguarda alguns segundos */
-    @PostMapping("/{id}/reprocess")
-    public ResponseEntity<VideoResponseDTO> reprocess(
-            @PathVariable UUID id,
-            @RequestParam(name = "waitSeconds", defaultValue = "0") int waitSeconds
-    ) {
-        var dto = videoService.buscarPorId(id);
-        if (dto == null || !hasGuid(dto.getStreamVideoId())) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
-
-        triggerReprocess(dto.getStreamVideoId());
-
-        if (waitSeconds > 0) {
-            dto = waitUntilHls(id, waitSeconds);
-        } else {
-            dto = streamIngest.refreshStatus(id);
-        }
-
-        dto = signDtoIfPossible(dto);
-        return ResponseEntity.ok(dto);
+        return signDtoForRequest(dto, req);
     }
 
     @DeleteMapping("/{id}")
@@ -160,7 +113,7 @@ public class VideoController {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException ex) {
         return problem(HttpStatus.BAD_REQUEST, ex.getMessage());
-    }
+        }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleIntegrity(DataIntegrityViolationException ex) {
@@ -175,8 +128,6 @@ public class VideoController {
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "Erro interno ao processar a requisição.");
     }
 
-    /* ==== Helpers ==== */
-
     private ResponseEntity<Map<String, Object>> problem(HttpStatus status, String message) {
         Map<String, Object> body = new HashMap<>();
         body.put("timestamp", OffsetDateTime.now().toString());
@@ -186,72 +137,20 @@ public class VideoController {
         return ResponseEntity.status(status).body(body);
     }
 
-    /** Centraliza a lógica de assinatura para evitar repetição */
-    private VideoResponseDTO signDtoIfPossible(VideoResponseDTO dto) {
+    /** Assina a URL HLS considerando as regras (algoritmo/IP/TTL) e o cliente atual. */
+    private VideoResponseDTO signDtoForRequest(VideoResponseDTO dto, HttpServletRequest req) {
         if (dto == null) return null;
 
         try {
-            if (hasGuid(dto.getStreamVideoId())) {
-                dto.setHlsMasterUrl(streamUrlService.hlsUrl(dto.getStreamVideoId()));
-            } else if (hasText(dto.getHlsMasterUrl())) {
-                dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
+            if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
+                dto.setHlsMasterUrl(streamUrlService.hlsUrlForRequest(dto.getStreamVideoId(), req));
+            } else if (dto.getHlsMasterUrl() != null && !dto.getHlsMasterUrl().isBlank()) {
+                dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrlForRequest(dto.getHlsMasterUrl(), req));
             }
         } catch (Exception e) {
-            // Não derruba a resposta se a assinatura falhar — apenas loga
-            log.warn("Falha ao assinar URL HLS p/ vídeo id={} streamVideoId={} hlsMasterUrl={}: {}",
+            log.warn("Falha ao assinar URL HLS para vídeo id={} streamVideoId={} hlsMasterUrl={}: {}",
                     dto.getId(), dto.getStreamVideoId(), dto.getHlsMasterUrl(), e.toString());
         }
         return dto;
-    }
-
-    private boolean hasGuid(String s) {
-        return s != null && !s.isBlank();
-    }
-
-    private boolean hasText(String s) {
-        return s != null && !s.isBlank();
-    }
-
-    /** Dispara o reprocess no Bunny (inicia/antecipa o pipeline de HLS) */
-    private void triggerReprocess(String guid) {
-        try {
-            bunnyClient()
-                .post()
-                .uri("/library/{lib}/videos/{guid}/reprocess", bunnyLibraryId, guid)
-                .retrieve()
-                .toBodilessEntity()
-                .block(Duration.ofSeconds(15));
-            log.info("Reprocess acionado no Bunny para guid={}", guid);
-        } catch (Exception e) {
-            log.warn("Falha ao acionar reprocess para guid={}: {}", guid, e.toString());
-        }
-    }
-
-    /** Aguarda até aparecer HLS (hlsMasterUrl não vazio) ou atingir o tempo limite */
-    private VideoResponseDTO waitUntilHls(UUID id, int waitSeconds) {
-        long deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(1, waitSeconds));
-        VideoResponseDTO last = null;
-
-        while (System.nanoTime() < deadlineNs) {
-            try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
-
-            last = streamIngest.refreshStatus(id);
-            if (last != null && hasText(last.getHlsMasterUrl())) {
-                // já assina e devolve
-                return signDtoIfPossible(last);
-            }
-        }
-        // se não veio HLS no tempo, devolve o último estado conhecido (assinado se der)
-        return signDtoIfPossible(last != null ? last : videoService.buscarPorId(id));
-    }
-
-    private WebClient bunnyClient() {
-        if (this.bunnyClient == null) {
-            this.bunnyClient = WebClient.builder()
-                .baseUrl("https://video.bunnycdn.com")
-                .defaultHeader("AccessKey", bunnyApiKey)
-                .build();
-        }
-        return this.bunnyClient;
     }
 }
