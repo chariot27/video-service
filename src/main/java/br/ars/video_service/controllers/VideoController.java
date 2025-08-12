@@ -1,3 +1,4 @@
+// src/main/java/br/ars/video_service/controllers/VideoController.java
 package br.ars.video_service.controllers;
 
 import br.ars.video_service.dto.VideoRequestDTO;
@@ -61,38 +62,26 @@ public class VideoController {
 
         var dto = streamIngest.uploadToStream(data, file);
 
-        // Se já tivermos o GUID do Stream no DTO, devolve com URL assinada
-        // (ajuste de acordo com seu DTO: streamVideoId / streamGuid / etc.)
-        if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
-            dto.setHlsMasterUrl(streamUrlService.signedHls(dto.getStreamVideoId()));
-        } else if (dto.getHlsMasterUrl() != null) {
-            dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
-        }
+        // se já houver GUID/URL, devolve assinada
+        signDtoIfPossible(dto);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(dto);
     }
 
     /** Lista somente vídeos prontos (READY) com URL HLS assinada */
     @GetMapping("/ready")
-    public ResponseEntity<List<VideoResponseDTO>> listReady(
-            @RequestParam(defaultValue = "12") int limit
-    ) {
+    public ResponseEntity<List<VideoResponseDTO>> listReady(@RequestParam(defaultValue = "12") int limit) {
         int safeLimit = Math.max(1, Math.min(50, limit)); // clamp 1..50
-        var list = videoQueryService.listReady(safeLimit);
 
-        var signed = list.stream().map(dto -> {
-            if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
-                dto.setHlsMasterUrl(streamUrlService.signedHls(dto.getStreamVideoId()));
-            } else if (dto.getHlsMasterUrl() != null) {
-                dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
-            }
-            return dto;
-        }).collect(Collectors.toList());
+        var list = videoQueryService.listReady(safeLimit);
+        var signed = list.stream()
+                .map(this::signDtoIfPossible)
+                .collect(Collectors.toList());
 
         return ResponseEntity.ok(signed);
     }
 
-    /** Lista geral (se ainda usa em outras telas) — sem alterar */
+    /** Lista geral (caso use em outras telas) */
     @GetMapping
     public List<VideoResponseDTO> list() {
         return videoService.listarVideos();
@@ -101,24 +90,14 @@ public class VideoController {
     @GetMapping("/{id}")
     public VideoResponseDTO get(@PathVariable UUID id) {
         var dto = videoService.buscarPorId(id);
-        if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
-            dto.setHlsMasterUrl(streamUrlService.signedHls(dto.getStreamVideoId()));
-        } else if (dto.getHlsMasterUrl() != null) {
-            dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
-        }
-        return dto;
+        return signDtoIfPossible(dto);
     }
 
     /** Força refresh do status no Bunny e retorna o DTO atualizado com URL assinada */
     @GetMapping("/{id}/status")
     public VideoResponseDTO refresh(@PathVariable UUID id) {
         var dto = streamIngest.refreshStatus(id);
-        if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
-            dto.setHlsMasterUrl(streamUrlService.signedHls(dto.getStreamVideoId()));
-        } else if (dto.getHlsMasterUrl() != null) {
-            dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
-        }
-        return dto;
+        return signDtoIfPossible(dto);
     }
 
     @DeleteMapping("/{id}")
@@ -147,6 +126,8 @@ public class VideoController {
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "Erro interno ao processar a requisição.");
     }
 
+    /* ==== Helpers ==== */
+
     private ResponseEntity<Map<String, Object>> problem(HttpStatus status, String message) {
         Map<String, Object> body = new HashMap<>();
         body.put("timestamp", OffsetDateTime.now().toString());
@@ -154,5 +135,24 @@ public class VideoController {
         body.put("error", status.getReasonPhrase());
         body.put("message", message);
         return ResponseEntity.status(status).body(body);
+    }
+
+    /** Centraliza a lógica de assinatura para evitar repetição */
+    private VideoResponseDTO signDtoIfPossible(VideoResponseDTO dto) {
+        if (dto == null) return null;
+
+        try {
+            if (dto.getStreamVideoId() != null && !dto.getStreamVideoId().isBlank()) {
+                // Pode usar hlsUrl(...) ou signedHls(...) (ambos existem)
+                dto.setHlsMasterUrl(streamUrlService.hlsUrl(dto.getStreamVideoId()));
+            } else if (dto.getHlsMasterUrl() != null && !dto.getHlsMasterUrl().isBlank()) {
+                dto.setHlsMasterUrl(streamUrlService.ensureSignedFromUrl(dto.getHlsMasterUrl()));
+            }
+        } catch (Exception e) {
+            // Não derruba a resposta se a assinatura falhar — apenas loga
+            log.warn("Falha ao assinar URL HLS para vídeo id={} streamVideoId={} hlsMasterUrl={}: {}",
+                    dto.getId(), dto.getStreamVideoId(), dto.getHlsMasterUrl(), e.toString());
+        }
+        return dto;
     }
 }
