@@ -1,78 +1,155 @@
+// br/ars/video_service/bunny/BunnyStreamClient.java
 package br.ars.video_service.bunny;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 
 @Service
 public class BunnyStreamClient {
 
-    private final RestTemplate http = new RestTemplate();
+    private final WebClient webClient;
 
     @Value("${bunny.stream.library-id}") private String libraryId;
-    @Value("${bunny.stream.api-key}") private String apiKey;       // "AccessKey"
-    @Value("${bunny.stream.cdn-host}") private String cdnHost;     // vz-....b-cdn.net
+    @Value("${bunny.stream.api-key}")   private String apiKey;     // AccessKey
+    @Value("${bunny.stream.cdn-host}")  private String cdnHost;    // vz-....b-cdn.net
 
-    // 1) Cria vídeo (retorna videoId GUID)
+    public BunnyStreamClient(@Qualifier("bunnyWebClient") WebClient webClient) {
+        this.webClient = webClient;
+    }
+
+    /** 1) Cria vídeo (retorna GUID) */
+    @SuppressWarnings("unchecked")
     public String createVideo(String title) {
         String url = "https://video.bunnycdn.com/library/" + libraryId + "/videos";
-        HttpHeaders h = headersJson();
-        Map<String, Object> payload = Map.of("title", title);
-        ResponseEntity<Map> resp = http.exchange(url, HttpMethod.POST, new HttpEntity<>(payload, h), Map.class);
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-            throw new RuntimeException("Falha ao criar vídeo no Bunny Stream");
+
+        Map<String, Object> resp = webClient.post()
+                .uri(url)
+                .headers(this::addAccessKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("title", title))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+
+        if (resp == null || resp.get("guid") == null) {
+            throw new RuntimeException("Falha ao criar vídeo no Bunny Stream (resposta sem GUID).");
         }
-        Object guid = resp.getBody().get("guid");
-        if (guid == null) throw new RuntimeException("Resposta sem GUID");
-        return guid.toString();
+        return String.valueOf(resp.get("guid"));
     }
 
-    // 2) Upload do arquivo bruto
+    /** 2a) Upload por FILE, mas **streaming** (sem Files.readAllBytes) */
     public void uploadVideo(String videoId, File file) {
-        try {
-            String url = "https://video.bunnycdn.com/library/" + libraryId + "/videos/" + videoId;
-            HttpHeaders h = new HttpHeaders();
-            h.add("AccessKey", apiKey);
-            h.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-            byte[] bytes = Files.readAllBytes(file.toPath());
-            ResponseEntity<String> resp = http.exchange(url, HttpMethod.PUT, new HttpEntity<>(bytes, h), String.class);
-            if (!resp.getStatusCode().is2xxSuccessful()) {
-                throw new RuntimeException("Falha no upload do vídeo: " + resp.getStatusCode());
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Erro no upload para Bunny Stream", e);
+        Path path = file.toPath();
+        try (InputStream in = Files.newInputStream(path)) {
+            long len = Files.size(path);
+            String ct = probeContentTypeSafe(path);
+            uploadVideoStream(videoId, file.getName(), in, len, ct);
+        } catch (IOException e) {
+            throw new RuntimeException("Erro ao abrir arquivo para upload.", e);
         }
     }
 
-    // 3) Status do vídeo
-    public Map getVideo(String videoId) {
+    /** 2b) Upload por STREAM puro (sem staging em disco) */
+    public void uploadVideoStream(String videoId,
+                                  String filename,
+                                  InputStream input,
+                                  long contentLength,
+                                  String contentType) {
+
         String url = "https://video.bunnycdn.com/library/" + libraryId + "/videos/" + videoId;
-        HttpHeaders h = headersJson();
-        ResponseEntity<Map> resp = http.exchange(url, HttpMethod.GET, new HttpEntity<>(h), Map.class);
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-            throw new RuntimeException("Falha ao consultar vídeo");
-        }
-        return resp.getBody();
+
+        // Resource que informa o contentLength (evita buffering)
+        InputStreamResource resource = new KnownLengthInputStreamResource(input, filename, contentLength);
+
+        webClient.put()
+                .uri(url)
+                .headers(this::addAccessKey)
+                .contentType(contentType != null ? MediaType.parseMediaType(contentType)
+                                                 : MediaType.APPLICATION_OCTET_STREAM)
+                .bodyValue(resource)
+                .retrieve()
+                .toBodilessEntity()
+                .block(); // bloquear aqui é ok na camada de serviço
     }
 
-    // URL de reprodução HLS
+    /** 3) Status do vídeo */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getVideo(String videoId) {
+        String url = "https://video.bunnycdn.com/library/" + libraryId + "/videos/" + videoId;
+
+        Map<String, Object> resp = webClient.get()
+                .uri(url)
+                .headers(this::addAccessKeyJson)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+
+        if (resp == null) throw new RuntimeException("Falha ao consultar vídeo no Bunny Stream.");
+        return resp;
+    }
+
+    /** URL de reprodução HLS */
     public String buildPlaybackUrl(String videoId) {
         return "https://" + cdnHost + "/" + videoId + "/playlist.m3u8";
     }
 
-    // Thumb padrão (opcional)
+    /** Thumb padrão */
     public String buildThumbnailUrl(String videoId) {
         return "https://" + cdnHost + "/" + videoId + "/thumbnail.jpg";
     }
 
-    private HttpHeaders headersJson() {
-        HttpHeaders h = new HttpHeaders();
+    /* ===== helpers ===== */
+
+    private void addAccessKey(HttpHeaders h) {
+        h.add("AccessKey", apiKey);
+    }
+
+    private void addAccessKeyJson(HttpHeaders h) {
         h.add("AccessKey", apiKey);
         h.setContentType(MediaType.APPLICATION_JSON);
-        return h;
+        h.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
+    }
+
+    private String probeContentTypeSafe(Path path) {
+        try {
+            String ct = Files.probeContentType(path);
+            return (ct != null) ? ct : "application/octet-stream";
+        } catch (IOException e) {
+            return "application/octet-stream";
+        }
+    }
+
+    /** InputStreamResource que conhece o tamanho e nome (evita buffering do body) */
+    private static class KnownLengthInputStreamResource extends InputStreamResource {
+        private final String filename;
+        private final long length;
+
+        public KnownLengthInputStreamResource(InputStream inputStream, String filename, long length) {
+            super(inputStream);
+            this.filename = filename;
+            this.length = length;
+        }
+
+        @Override
+        public String getFilename() {
+            return filename;
+        }
+
+        @Override
+        public long contentLength() {
+            return length;
+        }
     }
 }
