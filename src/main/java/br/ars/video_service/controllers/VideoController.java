@@ -72,7 +72,7 @@ public class VideoController {
 
     /** Lista somente vídeos prontos (READY) com URL HLS assinada para o cliente atual */
     @GetMapping("/ready")
-    public ResponseEntity<List<VideoResponseDTO>> listReady(@RequestParam(defaultValue = "12") int limit,
+    public ResponseEntity<List<VideoResponseDTO>> listReady(@RequestParam(defaultValue = "100") int limit,
                                                             HttpServletRequest req) {
         int safeLimit = Math.max(1, Math.min(50, limit));
 
